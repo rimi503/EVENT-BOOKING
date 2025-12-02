@@ -3,148 +3,119 @@ const router = express.Router();
 const Ticket = require('../models/Ticket');
 const { v4: uuidv4 } = require('uuid');
 
-// 1. INITIATE BOOKING (Save Details First)
+// 💰 OWNER SETTING: Price Per Person
+const PRICE_PER_HEAD = 1000; 
+
+// 1. INITIATE BOOKING (Calculate Amount Server-Side)
 router.post('/initiate-booking', async (req, res) => {
     try {
-        const { mainName, email, phone, members } = req.body;
+        const { mainGuest, members } = req.body;
         
-        // Basic Validation
-        if (!mainName || !email || !phone) {
-            return res.status(400).json({ success: false, message: "Main details missing" });
-        }
+        if (members.length > 4) return res.status(400).json({ message: "Max 5 members allowed." });
 
-        // Guests Validation
-        let validMembers = [];
-        if (members && members.length > 0) {
-            // Sirf wo guests lo jinka naam aur phone dono bhara ho
-            validMembers = members.filter(m => m.name.trim() !== "" && m.phone.trim() !== "");
-            
-            // Limit Check (1 Main + 4 Guests = 5 Max)
-            if (validMembers.length > 4) {
-                return res.status(400).json({ success: false, message: "Max 5 people allowed per group!" });
-            }
-        }
-
-        const uniqueTicketId = uuidv4(); 
-        
-        // Amount Calculation (500 per person)
-        const totalMembers = validMembers.length + 1; 
-        const totalAmount = totalMembers * 500; 
+        // Calculate Total
+        const totalPax = 1 + members.length;
+        const totalAmount = totalPax * PRICE_PER_HEAD;
+        const ticketId = uuidv4().slice(0, 8).toUpperCase();
 
         const newTicket = new Ticket({
-            ticketId: uniqueTicketId,
-            mainName,
-            email,
-            phone,
-            members: validMembers, 
-            amount: totalAmount,
-            paymentStatus: "INITIATED"
+            ticketId,
+            mainGuest,
+            members,
+            totalAmount,
+            paymentStatus: 'INITIATED'
         });
 
         await newTicket.save();
-
-        res.status(201).json({ 
-            success: true, 
-            message: "Details Saved", 
-            ticketId: uniqueTicketId,
-            amount: totalAmount
-        });
-
+        res.json({ success: true, ticketId, totalAmount, message: "Booking Started" });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error(error);
+        res.status(500).json({ success: false, message: "Server Error" });
     }
 });
 
-// 2. CONFIRM PAYMENT (UTR Update)
+// 2. VERIFY PAYMENT
 router.post('/confirm-payment', async (req, res) => {
     try {
         const { ticketId, transactionId } = req.body;
         
-        // Validation
-        if (!transactionId || transactionId.length < 5) {
-            return res.status(400).json({ success: false, message: "Invalid UTR" });
+        // Basic Validation
+        if(!transactionId || transactionId.length < 10) {
+            return res.status(400).json({ success: false, message: "Invalid Transaction ID" });
         }
 
-        // Duplicate Check
-        const existingUTR = await Ticket.findOne({ transactionId });
-        if (existingUTR) {
-            return res.status(409).json({ success: false, message: "UTR Already Used" });
+        // Check for Duplicate UTR
+        const duplicate = await Ticket.findOne({ transactionId, ticketId: { $ne: ticketId } });
+        if(duplicate) {
+            return res.status(400).json({ success: false, message: "UTR already used." });
         }
 
         const ticket = await Ticket.findOne({ ticketId });
-        if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+        if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
 
-        // Update Status
         ticket.transactionId = transactionId;
-        ticket.paymentStatus = "VERIFICATION_PENDING"; 
+        ticket.paymentStatus = 'VERIFICATION_PENDING';
+        ticket.rejectionReason = ""; 
         await ticket.save();
 
-        res.status(200).json({ success: true, message: "Payment Submitted", ticket });
+        res.json({ success: true, ticket });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ success: false, message: "Error updating payment" });
     }
 });
 
-// 3. CHECK STATUS (For Live Polling on Frontend)
-router.get('/status/:ticketId', async (req, res) => {
-    try {
-        const ticket = await Ticket.findOne({ ticketId: req.params.ticketId });
-        if (!ticket) return res.status(404).json({ error: "Not Found" });
-        
-        // Sirf status return karo
-        res.json({ paymentStatus: ticket.paymentStatus });
-    } catch (error) {
-        res.status(500).json({ error: "Error" });
-    }
-});
-
-// 4. ADMIN: GET ALL TICKETS
+// 3. ADMIN: FETCH ALL (Sorted Newest First)
 router.get('/all-tickets', async (req, res) => {
     try {
         const tickets = await Ticket.find().sort({ createdAt: -1 });
         res.json(tickets);
     } catch (error) {
-        res.status(500).json({ error: "Error fetching tickets" });
+        res.status(500).json({ message: "Error" });
     }
 });
 
-// 5. ADMIN: UPDATE STATUS (Approve/Reject)
+// 4. ADMIN: UPDATE STATUS
 router.post('/update-status', async (req, res) => {
     try {
-        const { ticketId, status } = req.body;
-        await Ticket.findOneAndUpdate({ ticketId }, { paymentStatus: status });
+        const { ticketId, status, reason } = req.body;
+        const updateData = { paymentStatus: status };
+        if (status === 'REJECTED') updateData.rejectionReason = reason;
+
+        await Ticket.findOneAndUpdate({ ticketId }, updateData);
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: "Update failed" });
+        res.status(500).json({ message: "Update failed" });
     }
 });
 
-// 6. SCANNER VERIFICATION
-router.post('/verify', async (req, res) => {
+// 5. USER: CHECK STATUS
+router.get('/status/:ticketId', async (req, res) => {
     try {
-        const { ticketId } = req.body;
-        const ticket = await Ticket.findOne({ ticketId });
-        
-        if (!ticket) return res.json({ success: false, message: "Invalid Ticket" });
-        if (ticket.paymentStatus !== "PAID") return res.json({ success: false, message: "Payment Pending / Rejected" });
-        if (ticket.isScanned) return res.json({ success: false, message: "Already Used" });
-        
-        // Mark as Used
-        ticket.isScanned = true;
-        ticket.scannedAt = new Date();
-        await ticket.save();
-        
-        res.json({ 
-            success: true, 
-            message: "Entry Approved", 
-            data: { 
-                name: ticket.mainName, 
-                members: ticket.members.map(m => m.name), 
-                totalPax: ticket.members.length + 1 
-            }
-        });
+        const ticket = await Ticket.findOne({ ticketId: req.params.ticketId });
+        if (!ticket) return res.status(404).json({ message: "Not found" });
+        res.json(ticket);
     } catch (error) {
-        res.status(500).json({ error: "Verify Error" });
+        res.status(500).json({ message: "Error" });
+    }
+});
+
+// 6. RECOVERY (Find My Ticket)
+router.post('/find-ticket', async (req, res) => {
+    try {
+        const { search } = req.body;
+        // Search by Phone OR Transaction ID OR Ticket ID
+        const ticket = await Ticket.findOne({
+            $or: [
+                { 'mainGuest.phone': search },
+                { transactionId: search },
+                { ticketId: search }
+            ]
+        });
+
+        if(ticket) res.json({ success: true, ticket });
+        else res.status(404).json({ success: false, message: "No booking found." });
+    } catch(e) {
+        res.status(500).json({ success: false, message: "Server Error" });
     }
 });
 

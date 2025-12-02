@@ -1,115 +1,213 @@
-import React, { useEffect, useState, Suspense, lazy } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
+import React, { useState, useEffect, Suspense, lazy } from "react";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Link,
+  Navigate,
+  useLocation,
+} from "react-router-dom";
+import axios from "axios";
 
 // Lazy Load Components
-const Booking = lazy(() => import('./Booking'));
-const Scanner = lazy(() => import('./Scanner'));
-const Admin = lazy(() => import('./Admin'));
-const Login = lazy(() => import('./Login'));
+const Booking = lazy(() => import("./Booking"));
+const Admin = lazy(() => import("./Admin"));
+const Login = lazy(() => import("./Login"));
 
-const ProtectedRoute = ({ children }) => {
-  const token = localStorage.getItem('adminToken');
-  return token ? children : <Navigate to="/login" />;
-};
+const API_BASE_URL = "http://localhost:5000";
 
-// --- NAVBAR ---
-const NavBar = () => {
+// --- NAVBAR COMPONENT ---
+const NavBar = ({ isAdmin, setIsAdmin }) => {
+  const [showRecover, setShowRecover] = useState(false);
+  const [recoverInput, setRecoverInput] = useState("");
   const location = useLocation();
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [scrolled, setScrolled] = useState(false);
 
-  useEffect(() => {
-    setIsAdmin(!!localStorage.getItem('adminToken'));
-    const handleScroll = () => setScrolled(window.scrollY > 20);
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [location]);
-
-  const handleLogout = () => {
-    localStorage.removeItem('adminToken');
-    localStorage.removeItem('adminName');
-    setIsAdmin(false);
-    window.location.href = '/';
+  const handleRecover = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/tickets/find-ticket`, {
+        search: recoverInput,
+      });
+      if (res.data.success) {
+        const state = {
+          mainGuest: res.data.ticket.mainGuest,
+          members: res.data.ticket.members,
+          ticketData: res.data.ticket,
+          utr: res.data.ticket.transactionId,
+        };
+        localStorage.setItem("gala_session_v2", JSON.stringify(state));
+        window.location.href = "/";
+      }
+    } catch (error) {
+      alert("No booking found. Check phone number or UTR.");
+    }
   };
 
-  const getLinkClass = (path) => {
-    const isActive = location.pathname === path;
-    return `text-xs md:text-sm font-medium tracking-widest uppercase transition-all duration-300 ${
-      isActive 
-      ? 'text-[#1C1C1C] font-bold border-b border-[#1C1C1C] pb-1' 
-      : 'text-gray-500 hover:text-[#1C1C1C]'
-    }`;
+  const handleLogout = async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/auth/logout`);
+      setIsAdmin(false);
+      window.location.href = "/";
+    } catch (e) {
+      console.error("Logout error");
+    }
   };
+
+  // Helper to check active link
+  const isActive = (path) =>
+    location.pathname === path
+      ? "text-black border-b-2 border-black pb-1"
+      : "text-gray-500 hover:text-black transition";
 
   return (
-    <nav className={`fixed top-0 left-0 w-full z-50 transition-all duration-300 ${
-        scrolled ? 'bg-[#FDFBF7]/95 backdrop-blur-md shadow-sm py-3' : 'bg-transparent py-5'
-    }`}>
-      <div className="max-w-7xl mx-auto px-6 md:px-12 flex justify-between items-center">
-        
-        <Link to="/" className="font-serif text-2xl font-bold tracking-[0.2em] text-[#1C1C1C]">
-          GALA<span className="text-[#C2B280]">.</span>
+    <>
+      <nav className="bg-white border-b border-gray-200 py-4 px-6 flex justify-between items-center sticky top-0 z-50 shadow-sm h-20">
+        <Link
+          to="/"
+          className="text-2xl font-black tracking-tighter flex items-center gap-1"
+        >
+          GALA<span className="text-yellow-600 text-3xl">.</span>
         </Link>
 
-        <div className="flex items-center gap-8">
-          <Link to="/" className={getLinkClass('/')}>Home</Link>
-          <Link to="/scan" className={getLinkClass('/scan')}>Scan</Link>
-          
+        <div className="flex gap-6 text-xs font-bold uppercase items-center">
+          <Link to="/" className={isActive("/")}>
+            Home
+          </Link>
+
+          {/* Recover Button */}
+          <button
+            onClick={() => setShowRecover(true)}
+            className="text-gray-500 hover:text-black transition"
+          >
+            Find My Pass
+          </button>
+
+          {/* Staff / Dashboard Logic */}
           {isAdmin ? (
-            <div className="flex items-center gap-6">
-                <Link to="/admin" className={getLinkClass('/admin')}>Dashboard</Link>
-                <button onClick={handleLogout} className="text-[10px] uppercase font-bold text-red-500 hover:text-red-700 tracking-widest border border-red-200 px-3 py-1 rounded hover:bg-red-50 transition">
-                    Logout
-                </button>
+            <div className="flex gap-4 items-center">
+              <Link
+                to="/admin"
+                className={`bg-black text-white px-4 py-2 rounded hover:bg-gray-800 transition ${
+                  location.pathname === "/admin" ? "bg-gray-800" : ""
+                }`}
+              >
+                Dashboard
+              </Link>
+              <button
+                onClick={handleLogout}
+                className="text-red-500 hover:text-red-700"
+              >
+                Logout
+              </button>
             </div>
           ) : (
-            <Link to="/login" className="text-[10px] font-bold uppercase tracking-widest text-[#1C1C1C] border border-[#1C1C1C] px-4 py-2 hover:bg-[#1C1C1C] hover:text-[#FDFBF7] transition">
-              Staff Login
+            <Link
+              to="/login"
+              className={`border border-black px-5 py-2 rounded hover:bg-black hover:text-white transition ${
+                location.pathname === "/login"
+                  ? "bg-black text-white"
+                  : "text-black"
+              }`}
+            >
+              Admin Login
             </Link>
           )}
         </div>
-      </div>
-    </nav>
+      </nav>
+
+      {/* Recover Modal */}
+      {showRecover && (
+        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white p-8 rounded-2xl w-full max-w-md relative shadow-2xl">
+            <button
+              onClick={() => setShowRecover(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-black text-xl"
+            >
+              ×
+            </button>
+            <h2 className="text-xl font-bold mb-2">Lost your pass?</h2>
+            <p className="text-xs text-gray-500 mb-6">
+              Enter your Phone Number or Transaction ID to recover your booking.
+            </p>
+            <form onSubmit={handleRecover} className="space-y-4">
+              <input
+                className="w-full border-b border-gray-300 py-2 text-sm outline-none focus:border-black"
+                placeholder="Phone Number / UTR"
+                value={recoverInput}
+                onChange={(e) => setRecoverInput(e.target.value)}
+                required
+              />
+              <button className="w-full bg-black text-white py-3 rounded font-bold text-xs uppercase tracking-widest hover:bg-gray-800">
+                Search Booking
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 
-const LoadingSpinner = () => (
-  <div className="flex justify-center items-center h-full w-full min-h-[50vh]">
-    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#1C1C1C]"></div>
-  </div>
-);
+// --- MAIN APP ---
+const App = () => {
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-function App() {
+  // Check Session on Load
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/api/auth/check`);
+        setIsAdmin(res.data.isAdmin);
+      } catch (e) {
+        setIsAdmin(false);
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  if (loading)
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#F5F5F5]">
+        Loading...
+      </div>
+    );
+
   return (
     <Router>
-      <div className="min-h-screen bg-[#EBE9E4] text-[#1C1C1C] font-sans selection:bg-[#C2B280] selection:text-white flex flex-col"> 
-        <NavBar />
-        
-        {/* Main Content Area - Properly Spaced */}
-        <div className="flex-grow flex flex-col items-center justify-center w-full px-4 pt-24 pb-8">
-          <div className="w-full max-w-7xl">
-            <Suspense fallback={<LoadingSpinner />}>
-              <Routes>
-                <Route path="/" element={<Booking />} />
-                <Route path="/scan" element={<Scanner />} />
-                <Route path="/login" element={<Login />} />
-                
-                <Route path="/admin" element={
-                  <ProtectedRoute>
-                    <Admin />
-                  </ProtectedRoute>
-                } />
-              </Routes>
-            </Suspense>
-          </div>
+      <div className="min-h-screen flex flex-col bg-[#F5F5F5]">
+        <NavBar isAdmin={isAdmin} setIsAdmin={setIsAdmin} />
+        <div className="flex-grow">
+          <Suspense
+            fallback={
+              <div className="p-10 text-center">Loading Component...</div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<Booking />} />
+              {/* Pass setIsAdmin to Login so Navbar updates instantly */}
+              <Route
+                path="/login"
+                element={
+                  isAdmin ? (
+                    <Navigate to="/admin" />
+                  ) : (
+                    <Login setIsAdmin={setIsAdmin} />
+                  )
+                }
+              />
+              <Route
+                path="/admin"
+                element={isAdmin ? <Admin /> : <Navigate to="/login" />}
+              />
+            </Routes>
+          </Suspense>
         </div>
-{/* 
-        <footer className="text-center pb-6 text-[10px] uppercase tracking-widest opacity-40">
-          © 2025 The Official Event
-        </footer> */}
       </div>
     </Router>
   );
-}
+};
 
 export default App;

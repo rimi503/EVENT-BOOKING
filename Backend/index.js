@@ -1,57 +1,34 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const cluster = require('cluster');
-const os = require('os');
+const cookieParser = require('cookie-parser'); // 👈 NEW
 require('dotenv').config();
 
 const ticketRoutes = require('./routes/ticketRoutes');
 const authRoutes = require('./routes/authRoutes');
-const rateLimit = require('express-rate-limit');
 
-const totalCPUs = os.cpus().length; // Check karo server me kitne CPU hain
+const app = express();
 
-// --- CLUSTER LOGIC ---
-if (cluster.isMaster) {
-    console.log(`🚀 Master Process ${process.pid} is running`);
-    console.log(`🔥 Forking for ${totalCPUs} CPUs...`);
+// 👇 CORS CONFIGURATION (Very Important for Cookies)
+app.use(cors({
+    origin: 'http://localhost:5173', // Frontend ka EXACT URL
+    credentials: true // 👈 Ye zaroori hai cookie bhejne ke liye
+}));
 
-    // Jitne CPU, utne workers banao
-    for (let i = 0; i < totalCPUs; i++) {
-        cluster.fork();
-    }
+app.use(express.json());
+app.use(cookieParser()); // 👈 Cookie parser middleware
 
-    // Agar koi worker mar jaye (crash), to naya bana do
-    cluster.on('exit', (worker, code, signal) => {
-        console.log(`❌ Worker ${worker.process.pid} died. Starting a new one...`);
-        cluster.fork();
-    });
+// ... Database Connection (Same as before) ...
+const dbLink = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/eventPartyDB";
+mongoose.connect(dbLink)
+    .then(() => console.log('✅ DB Connected'))
+    .catch(err => console.log('❌ DB Error:', err));
 
-} else {
-    // --- WORKER PROCESS (Asli Server Code Yahan Hai) ---
-    const app = express();
+// Routes
+app.use('/api/tickets', ticketRoutes);
+app.use('/api/auth', authRoutes);
 
-    app.use(cors());
-    app.use(express.json());
-
-    // Database Connection
-    mongoose.connect(process.env.MONGO_URI)
-        .then(() => console.log(`✅ DB Connected (Worker ${process.pid})`))
-        .catch(err => console.log('❌ DB Error:', err));
-
-        // Rule: 1 IP se 15 minute me max 100 requests
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, 
-    max: 100, 
-    message: "Too many requests, please try again later."
-})
-    // Routes
-    app.use('/api', limiter);
-    app.use('/api/tickets', ticketRoutes);
-    app.use('/api/auth', authRoutes);
-
-    const PORT = process.env.PORT || 5000;
-    app.listen(PORT, () => {
-        console.log(`⚡ Server running on Worker ${process.pid}`);
-    });
-}
+const PORT = 5000;
+app.listen(PORT, () => {
+    console.log(`⚡ Server running on port ${PORT}`);
+});

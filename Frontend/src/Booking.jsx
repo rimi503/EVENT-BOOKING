@@ -1,567 +1,390 @@
-import React, { useState, useEffect, useRef } from "react";
-import axios from "axios";
-import { QRCodeCanvas } from "qrcode.react";
-import html2canvas from "html2canvas";
-// ❌ Static image import hata diya
-// import QRImg from "../Images/QR.jpg";
+import React, { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
+import { QRCodeCanvas } from 'qrcode.react';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 
-// 🎯 DEPLOYMENT VARIABLE
-const API_BASE_URL = "http://localhost:5000";
-// 👇 FIX: APNA ASLI UPI ID YAHAN DAALO
-const MERCHANT_UPI = "rudragajjar744-2@okhdfcbank";
-const MERCHANT_NAME = "The Gala Event";
+// 🎯 OWNER CONFIGURATION
+const API_BASE_URL = "http://localhost:5000"; 
+const MERCHANT_UPI = "your_merchant_upi@okaxis"; 
+const MERCHANT_NAME = "New Year Gala";   
+const PASS_BG_URL = "https://i.imgur.com/c8p7r9A.jpeg"; // Horizontal Image
 
 const Booking = () => {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [warningAck, setWarningAck] = useState(false);
 
-  const [mainBooker, setMainBooker] = useState({
-    name: "",
-    email: "",
-    phone: "",
-  });
-  const [members, setMembers] = useState([]);
-  const [ticketData, setTicketData] = useState(null);
-  const [utr, setUtr] = useState("");
-  const [selectedApp, setSelectedApp] = useState("qr");
+  // Data
+  const [mainGuest, setMainGuest] = useState({ firstName: '', lastName: '', surname: '', phone: '', email: '' });
+  const [members, setMembers] = useState([]); 
+  const [ticketData, setTicketData] = useState(null); 
+  const [utr, setUtr] = useState('');
+  const [isLoaded, setIsLoaded] = useState(false);
 
-  // --- HANDLERS (Same) ---
-  const handleMemberChange = (index, field, value) => {
-    const updatedMembers = [...members];
-    updatedMembers[index][field] = value;
-    setMembers(updatedMembers);
+  // --- 1. RESTORE STATE ---
+  useEffect(() => {
+    const saved = localStorage.getItem('gala_session_v2');
+    if (saved) {
+        try {
+            const p = JSON.parse(saved);
+            if(p.mainGuest) setMainGuest(p.mainGuest);
+            if(p.members) setMembers(p.members);
+            if(p.ticketData) setTicketData(p.ticketData);
+            if(p.utr) setUtr(p.utr);
+            
+            if (p.ticketData) {
+                const s = p.ticketData.paymentStatus;
+                if (s === 'INITIATED') setStep(2);
+                else if (s === 'VERIFICATION_PENDING' && !p.utr) setStep(3);
+                else if (['VERIFICATION_PENDING', 'PAID', 'REJECTED'].includes(s)) setStep(4);
+            }
+        } catch (e) { localStorage.removeItem('gala_session_v2'); }
+    }
+    setIsLoaded(true);
+  }, []);
+
+  // --- 2. AUTO SAVE ---
+  useEffect(() => {
+    if (isLoaded && (mainGuest.firstName || ticketData)) {
+        const session = { mainGuest, members, ticketData, utr };
+        localStorage.setItem('gala_session_v2', JSON.stringify(session));
+    }
+  }, [mainGuest, members, ticketData, utr, isLoaded]);
+
+  // --- HANDLERS ---
+  const handleReset = () => {
+      if(window.confirm("Reset Form? All data will be cleared.")) {
+          localStorage.removeItem('gala_session_v2');
+          window.location.reload();
+      }
   };
 
-  const addMember = () => {
-    if (members.length < 4) setMembers([...members, { name: "", phone: "" }]);
-  };
-
-  const removeMember = (index) => {
-    const updatedMembers = [...members];
-    updatedMembers.splice(index, 1);
-    setMembers(updatedMembers);
-  };
-
-  const handleDetailsSubmit = async (e) => {
+  const handleInitiate = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const validMembers = members.filter(
-        (m) => m.name.trim() !== "" && m.phone.trim() !== ""
-      );
-      const res = await axios.post(
-        `${API_BASE_URL}/api/tickets/initiate-booking`,
-        {
-          mainName: mainBooker.name,
-          email: mainBooker.email,
-          phone: mainBooker.phone,
-          members: validMembers,
+        const validMembers = members.filter(m => m.name.trim() !== "");
+        const res = await axios.post(`${API_BASE_URL}/api/tickets/initiate-booking`, { mainGuest, members: validMembers });
+        if(res.data.success) {
+            setTicketData({ ...res.data, paymentStatus: 'INITIATED' });
+            setStep(2);
         }
-      );
-      if (res.data.success) {
-        setTicketData(res.data);
-        setStep(2);
-      }
-    } catch (error) {
-      alert("Error saving details.");
-    } finally {
-      setLoading(false);
-    }
+    } catch (error) { alert("Error initiating booking. Please try again."); }
+    finally { setLoading(false); }
   };
 
   const handlePaymentSubmit = async (e) => {
-    e.preventDefault();
-    if (!utr) return alert("Please enter UTR/Ref ID.");
-    setLoading(true);
-    try {
-      const res = await axios.post(
-        `${API_BASE_URL}/api/tickets/confirm-payment`,
-        {
-          ticketId: ticketData.ticketId,
-          transactionId: utr,
-        }
-      );
-      if (res.data.success) {
-        setTicketData(res.data.ticket);
-        setStep(3);
-      }
-    } catch (error) {
-      alert("Error submitting payment or UTR already used.");
-    } finally {
-      setLoading(false);
-    }
+      e.preventDefault();
+      if(utr.length < 10) return alert("Please enter a valid 10-12 digit UTR.");
+      setLoading(true);
+      try {
+          const res = await axios.post(`${API_BASE_URL}/api/tickets/confirm-payment`, { ticketId: ticketData.ticketId, transactionId: utr });
+          if(res.data.success) {
+              setTicketData(res.data.ticket);
+              setStep(4);
+          }
+      } catch (e) { alert(e.response?.data?.message || "Verification Failed"); }
+      finally { setLoading(false); }
   };
 
-  // --- UPI LINK GENERATOR (Fixed Amount) ---
-  const generateUpiLink = (scheme = null) => {
-    const upiBase = `upi://pay?pa=${MERCHANT_UPI}&pn=${MERCHANT_NAME}&am=${ticketData?.amount}&tn=Ticket-${ticketData?.ticketId}&cu=INR`;
-
-    // Deep link schemes (Inka VPA bhi same rahega)
-    if (scheme === "gpay")
-      return `tez://upi/pay?pa=${MERCHANT_UPI}&pn=${MERCHANT_NAME}&am=${ticketData?.amount}&tn=Ticket-${ticketData?.ticketId}&cu=INR`;
-    if (scheme === "phonepe")
-      return `phonepe://pay?pa=${MERCHANT_UPI}&pn=${MERCHANT_NAME}&am=${ticketData?.amount}&tn=Ticket-${ticketData?.ticketId}&cu=INR`;
-    if (scheme === "paytm")
-      return `paytmmp://pay?pa=${MERCHANT_UPI}&pn=${MERCHANT_NAME}&am=${ticketData?.amount}&tn=Ticket-${ticketData?.ticketId}&cu=INR`;
-
-    return upiBase; // Generic for QR
+  const getUPI = (app) => {
+      if(!ticketData) return "";
+      const amt = ticketData.totalAmount;
+      const params = `pa=${MERCHANT_UPI}&pn=${MERCHANT_NAME}&am=${amt}&tn=TICKET-${ticketData.ticketId}&cu=INR`;
+      
+      if(app === 'gpay') return `tez://upi/pay?${params}`;
+      if(app === 'phonepe') return `phonepe://upi/pay?${params}`;
+      if(app === 'paytm') return `paytmmp://upi/pay?${params}`;
+      return `upi://pay?${params}`;
   };
 
-  // --- TICKET VIEW ---
-  const TicketSuccessStep = () => {
-    const [status, setStatus] = useState("VERIFICATION_PENDING");
-    const ticketRef = useRef(null);
+  // --- STATUS & DOWNLOAD PAGE ---
+  const StatusPage = () => {
+      const [status, setStatus] = useState(ticketData?.paymentStatus);
+      const [reason, setReason] = useState(ticketData?.rejectionReason);
 
-    useEffect(() => {
-      if (ticketData.paymentStatus === "PAID") {
-        setStatus("PAID");
-        return;
-      }
-      const interval = setInterval(async () => {
-        try {
-          const res = await axios.get(
-            `${API_BASE_URL}/api/tickets/status/${ticketData.ticketId}`
-          );
-          setStatus(res.data.paymentStatus);
-          if (res.data.paymentStatus === "PAID") clearInterval(interval);
-        } catch (err) {}
-      }, 3000);
-      return () => clearInterval(interval);
-    }, []);
+      useEffect(() => {
+          if(status === 'PAID' || status === 'REJECTED') return;
+          
+          const interval = setInterval(async () => {
+              try {
+                  const res = await axios.get(`${API_BASE_URL}/api/tickets/status/${ticketData.ticketId}`);
+                  setStatus(res.data.paymentStatus);
+                  setReason(res.data.rejectionReason);
+                  
+                  const ls = JSON.parse(localStorage.getItem('gala_session_v2') || '{}');
+                  ls.ticketData = res.data;
+                  localStorage.setItem('gala_session_v2', JSON.stringify(ls));
 
-    const downloadTicket = async () => {
-      if (!ticketRef.current) return;
-      const canvas = await html2canvas(ticketRef.current, {
-        scale: 2,
-        useCORS: true,
-      });
-      const link = document.createElement("a");
-      link.href = canvas.toDataURL("image/png");
-      link.download = `EventPass-${ticketData.mainName}.png`;
-      link.click();
-    };
+                  if(res.data.paymentStatus !== 'VERIFICATION_PENDING') clearInterval(interval);
+              } catch (e) { 
+                  if(e.response?.status === 404) { 
+                      alert("Session invalid or ticket deleted."); 
+                      handleReset(); 
+                  } 
+              }
+          }, 2000);
+          return () => clearInterval(interval);
+      }, [status]);
 
-    return (
-      <div className="animate-fadeIn w-full max-w-sm mx-auto">
-        {/* Notification */}
-        <div
-          className={`mb-6 p-4 rounded-none border-l-4 text-sm ${
-            status === "PAID"
-              ? "bg-[#E6F4EA] border-[#1E4620] text-[#1E4620]"
-              : "bg-[#FFF4E5] border-[#FFD699] text-[#663C00]"
-          }`}
-        >
-          <p className="font-bold">
-            {status === "PAID" ? "TICKET CONFIRMED" : "PAYMENT UNDER REVIEW"}
-          </p>
-          <p className="opacity-80 text-xs mt-1">
-            {status === "PAID"
-              ? "Your pass is ready."
-              : "Please wait for approval..."}
-          </p>
-        </div>
+      // --- PASS COMPONENT (HORIZONTAL) ---
+      const FinalPass = ({ name, id, index }) => {
+          const passRef = useRef();
+          const [generating, setGenerating] = useState(false);
 
-        {/* --- TICKET CARD (Aesthetic) --- */}
-        <div
-          ref={ticketRef}
-          className="bg-[#FDFBF7] text-[#1C1C1C] shadow-2xl relative overflow-hidden border border-[#E5E0D8]"
-        >
-          <div className="bg-[#1C1C1C] text-[#FDFBF7] p-6 text-center">
-            <h3 className="font-serif text-2xl tracking-widest uppercase">
-              GALA NIGHT
-            </h3>
-            <p className="text-[10px] tracking-[0.3em] uppercase opacity-60">
-              Official Entry Pass
-            </p>
-          </div>
+          const downloadPDF = async () => {
+              if (!passRef.current) return;
+              setGenerating(true);
+              
+              try {
+                  // Use html2canvas with forced background color to avoid transparency issues
+                  const canvas = await html2canvas(passRef.current, {
+                      scale: 2,
+                      useCORS: true,
+                      backgroundColor: '#000000', 
+                      logging: false,
+                  });
 
-          <div className="p-6 flex flex-col items-center">
-            <div className="relative p-3 border border-[#E5E0D8] bg-white shadow-sm mb-6">
-              <QRCodeCanvas
-                value={ticketData.ticketId}
-                size={150}
-                fgColor="#1C1C1C"
-              />
-              {status !== "PAID" && (
-                <div className="absolute inset-0 bg-[#FDFBF7]/90 backdrop-blur-[2px] flex flex-col items-center justify-center">
-                  <span className="text-2xl">🔒</span>
+                  const imgData = canvas.toDataURL('image/png');
+                  
+                  // Create Landscape PDF matching the container dimensions roughly
+                  // 600px width corresponds to roughly 211mm in standard printing terms (at 72dpi)
+                  // but for screen PDF, we can use px units or match aspect ratio.
+                  // A standard A5 landscape or custom size works well.
+                  const pdf = new jsPDF({
+                      orientation: 'landscape',
+                      unit: 'px',
+                      format: [600, 300] 
+                  });
+
+                  pdf.addImage(imgData, 'PNG', 0, 0, 600, 300);
+                  pdf.save(`Pass-${name.replace(/\s+/g, '_')}.pdf`);
+
+              } catch (error) {
+                  console.error("PDF Error:", error);
+                  alert("Failed to generate PDF.");
+              } finally {
+                  setGenerating(false);
+              }
+          };
+
+          return (
+            <div className="flex flex-col items-center mb-8 w-full">
+                {/* HORIZONTAL TICKET CONTAINER
+                   - Using inline styles for colors to prevent 'oklab' error in html2canvas
+                   - Tailwind for layout structure
+                */}
+                <div className="overflow-x-auto w-full flex justify-center p-2">
+                    <div 
+                        ref={passRef}
+                        className="relative w-[600px] h-[300px] flex-shrink-0 rounded-xl shadow-2xl overflow-hidden"
+                        style={{ backgroundColor: '#000000', color: '#ffffff' }}
+                    >
+                        {/* Background Image */}
+                        {/* <img 
+                            src={PASS_BG_URL} 
+                            className="absolute inset-0 w-full h-full object-cover" 
+                            crossOrigin="anonymous" 
+                            alt="pass"
+                        /> */}
+
+                        {/* OVERLAYS */}
+                        
+                        {/* Top Left: Branding */}
+                        <div className="absolute top-6 left-8 z-10">
+                             <p className="text-xs tracking-[0.3em] uppercase opacity-80 font-light" style={{ color: '#ffffff' }}>New Year</p>
+                             <h1 className="text-5xl font-serif font-bold leading-none mt-1 drop-shadow-lg" style={{ color: '#eab308' }}>GALA</h1>
+                        </div>
+
+                        {/* Right Side: Guest Info */}
+                        <div className="absolute top-1/2 right-10 -translate-y-1/2 text-right z-10 w-1/2">
+                            <p className="text-[10px] uppercase tracking-[0.2em] mb-2" style={{ color: '#d1d5db' }}>Guest Name</p>
+                            <h2 className="text-3xl font-bold uppercase font-sans tracking-wide leading-tight drop-shadow-md break-words" style={{ color: '#ffffff' }}>
+                                {name}
+                            </h2>
+                            <div className="mt-4 inline-block border px-3 py-1 rounded backdrop-blur-sm" style={{ borderColor: 'rgba(255,255,255,0.3)', backgroundColor: 'rgba(0,0,0,0.4)' }}>
+                                <p className="text-[10px] font-mono tracking-widest" style={{ color: '#ffffff' }}>
+                                    ID: {id}-{index + 1}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Bottom Bar */}
+                        <div className="absolute bottom-0 left-0 w-full h-10 flex items-center justify-between px-8" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}>
+                            <span className="text-[10px] uppercase tracking-[0.2em]" style={{ color: '#9ca3af' }}>Admit One</span>
+                            <span className="text-[10px] uppercase tracking-[0.2em]" style={{ color: '#9ca3af' }}>Non-Transferable</span>
+                        </div>
+                    </div>
                 </div>
-              )}
+
+                <button 
+                    onClick={downloadPDF} 
+                    disabled={generating}
+                    className="mt-4 bg-black text-white px-8 py-3 rounded-full text-xs font-bold uppercase tracking-widest hover:bg-gray-800 transition-all shadow-lg flex items-center gap-2"
+                >
+                    {generating ? "Processing..." : "Download PDF Pass"}
+                </button>
             </div>
+          );
+      };
 
-            <div className="w-full space-y-3 text-sm">
-              <div className="flex justify-between border-b border-[#E5E0D8] pb-1">
-                <span className="uppercase text-[10px] tracking-widest text-gray-400">
-                  Guest
-                </span>
-                <span className="font-bold">{ticketData.mainName}</span>
+      if(status === 'REJECTED') return (
+          <div className="text-center py-12 animate-fadeIn">
+              <div className="text-5xl mb-4">❌</div>
+              <h2 className="text-xl font-bold text-red-600">Application Rejected</h2>
+              <div className="bg-red-50 border border-red-200 p-4 mt-4 rounded text-sm text-red-800 text-left max-w-xs mx-auto">
+                  <p className="font-bold text-xs uppercase mb-1 opacity-70">Reason:</p>
+                  "{reason || "Verification Failed"}"
               </div>
-              <div className="flex justify-between border-b border-[#E5E0D8] pb-1">
-                <span className="uppercase text-[10px] tracking-widest text-gray-400">
-                  Pax
-                </span>
-                <span className="font-bold">
-                  {ticketData.members.length + 1} People
-                </span>
+              <button onClick={() => {setStep(3); setUtr('');}} className="mt-6 bg-black text-white py-3 px-8 rounded font-bold text-xs">Retry Payment Info</button>
+          </div>
+      );
+
+      if(status !== 'PAID') return (
+          <div className="text-center py-20 animate-fadeIn">
+              <div className="animate-spin w-12 h-12 border-4 border-gray-200 border-t-black rounded-full mx-auto mb-6"></div>
+              <h2 className="text-xl font-bold">Verifying Payment...</h2>
+              <p className="text-xs text-gray-500 mt-2">Admin is checking UTR: <span className="font-mono text-black">{ticketData.transactionId}</span></p>
+              <p className="text-[10px] text-red-400 mt-8 animate-pulse">DO NOT CLOSE OR REFRESH</p>
+          </div>
+      );
+
+      return (
+          <div className="py-8 animate-fadeIn w-full max-w-5xl mx-auto">
+              <div className="text-center mb-10">
+                  <h2 className="text-2xl font-bold text-green-700 mb-2">Booking Confirmed ✅</h2>
+                  <p className="text-sm text-gray-600">Download your official event passes below.</p>
+                  <button onClick={() => window.open(`https://wa.me/?text=Got our passes for the Gala!`, '_blank')} className="mt-4 text-[10px] font-bold text-green-600 border border-green-600 px-4 py-1 rounded-full hover:bg-green-50">Share on WhatsApp</button>
               </div>
-              <div className="flex justify-between pt-1">
-                <span className="uppercase text-[10px] tracking-widest text-gray-400">
-                  ID
-                </span>
-                <span className="font-mono text-xs text-gray-500">
-                  {ticketData.ticketId.slice(0, 8)}
-                </span>
+              
+              <div className="flex flex-col items-center gap-6">
+                  {/* Main Guest Pass */}
+                  <FinalPass name={`${ticketData.mainGuest.firstName} ${ticketData.mainGuest.lastName}`} id={ticketData.ticketId} index={0} />
+                  
+                  {/* Sub Members Passes */}
+                  {ticketData.members.map((m, i) => (
+                      <FinalPass key={i} name={m.name} id={ticketData.ticketId} index={i+1} />
+                  ))}
               </div>
-            </div>
+              
+              <div className="text-center mt-12 pt-8 border-t border-gray-200">
+                  <button onClick={handleReset} className="text-gray-400 text-xs underline hover:text-black">Start A New Booking</button>
+              </div>
           </div>
-
-          <div className="bg-[#1C1C1C] p-3 text-center">
-            <p className="text-[8px] text-[#8C8C88] uppercase tracking-[0.2em]">
-              Admit One Group
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={downloadTicket}
-          disabled={status !== "PAID"}
-          className={`mt-6 w-full py-4 font-bold text-xs uppercase tracking-[0.2em] transition-all border border-[#1C1C1C] ${
-            status === "PAID"
-              ? "bg-[#1C1C1C] text-[#FDFBF7] hover:bg-white hover:text-[#1C1C1C]"
-              : "bg-transparent text-gray-400 border-gray-300 cursor-not-allowed"
-          }`}
-        >
-          {status === "PAID" ? "Download Ticket" : "Processing..."}
-        </button>
-      </div>
-    );
-  };
-
-  // --- UPI PAYMENT OPTIONS COMPONENT ---
-  const UpiPaymentOptions = () => {
-    const upiApps = [
-      {
-        name: "GPay",
-        scheme: "gpay",
-        color: "bg-[#4285F4]",
-        text: "text-white",
-      },
-      {
-        name: "PhonePe",
-        scheme: "phonepe",
-        color: "bg-[#5F259F]",
-        text: "text-white",
-      },
-      {
-        name: "PayTM",
-        scheme: "paytm",
-        color: "bg-[#00B9F1]",
-        text: "text-black",
-      },
-    ];
-
-    const handleAppClick = (scheme) => {
-      const link = generateUpiLink(scheme);
-      window.open(link, "_blank");
-      setSelectedApp(scheme);
-    };
-
-    return (
-      <div className="w-full mb-6">
-        <h4 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">
-          1. Select Payment Method
-        </h4>
-
-        {/* QR CODE VIEW (Dynamic QR using VPA) */}
-        <div className="flex justify-center mb-4 transition-opacity duration-300">
-          <div
-            className={`border border-gray-200 p-3 bg-white shadow-md rounded-lg ${
-              selectedApp !== "qr" ? "opacity-50 md:opacity-100" : ""
-            }`}
-          >
-            <QRCodeCanvas
-              value={generateUpiLink()} // UPI Link with fixed amount
-              size={150}
-              fgColor="#1C1C1C"
-              level="H"
-            />
-          </div>
-        </div>
-
-        {/* APP DEEP LINK BUTTONS */}
-        <div className="space-y-2 md:space-y-0 md:flex md:justify-center md:gap-3 transition-opacity duration-300">
-          {/* QR Code Button */}
-          <button
-            onClick={() => setSelectedApp("qr")}
-            className={`text-xs px-3 py-1 rounded-full font-semibold border ${
-              selectedApp === "qr"
-                ? "bg-[#1C1C1C] text-white border-[#1C1C1C]"
-                : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
-            }`}
-          >
-            QR Code (Scan)
-          </button>
-
-          {/* Direct Pay Buttons (Opens UPI App) */}
-          {upiApps.map((app) => (
-            <button
-              key={app.name}
-              onClick={() => handleAppClick(app.scheme)}
-              className={`text-xs px-3 py-1 rounded-full font-semibold border transition-all ${
-                selectedApp === app.scheme
-                  ? `${app.color} ${app.text} border-transparent shadow-md`
-                  : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              {app.name}
-            </button>
-          ))}
-        </div>
-
-        <p className="text-[10px] text-gray-400 mt-2 font-bold tracking-widest">
-          {selectedApp === "qr"
-            ? "Scan above to pay."
-            : `Opens ${selectedApp.toUpperCase()} app.`}
-        </p>
-      </div>
-    );
+      );
   };
 
   return (
-    <div className="w-full flex justify-center items-center py-4 md:py-8">
-      <div className="w-full max-w-7xl bg-[#FDFBF7] shadow-2xl overflow-hidden flex flex-col lg:flex-row min-h-[650px] border border-[#E5E0D8] rounded-3xl">
-        {/* LEFT BRANDING */}
-        <div className="hidden lg:flex lg:w-5/12 bg-[#1C1C1C] text-[#FDFBF7] p-12 flex-col justify-center relative">
-          <div className="absolute top-0 left-0 w-full h-full opacity-10 bg-[radial-gradient(#C2B280_1px,transparent_1px)] [background-size:20px_20px]"></div>
-          <div className="relative z-10 space-y-6">
-            <div className="inline-block border border-[#C2B280] px-3 py-1 text-[10px] uppercase tracking-[0.3em] text-[#C2B280]">
-              Dec 31 • 2025
-            </div>
-            <h1 className="font-serif text-6xl leading-none tracking-tight">
-              The
-              <br />
-              Grand
-              <br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#C2B280] to-[#E5E0D8]">
-                Gala
-              </span>
-              .
-            </h1>
-            <p className="opacity-60 text-sm leading-relaxed max-w-xs font-light border-l border-[#C2B280] pl-4">
-              Join us for an evening of elegance and celebration.
-            </p>
-          </div>
-        </div>
-
-        {/* RIGHT FORM AREA */}
-        <div className="w-full lg:w-7/12 p-8 md:p-16 flex flex-col justify-center bg-white relative">
-          <div className="lg:hidden mb-8 text-center border-b border-[#E5E0D8] pb-6">
-            <h2 className="font-serif text-3xl text-[#1C1C1C]">THE GALA</h2>
-          </div>
-
-          {/* STEP 1: FORM */}
-          {step === 1 && (
-            <div className="animate-fadeIn max-w-lg mx-auto w-full">
-              <div className="mb-8">
-                <h2 className="text-2xl font-serif text-[#1C1C1C] mb-2">
-                  Guest Registration
-                </h2>
-                <p className="text-xs text-gray-600 uppercase tracking-widest">
-                  Enter details to generate pass
-                </p>
-              </div>
-              <form onSubmit={handleDetailsSubmit} className="space-y-8">
-                <div className="space-y-6">
-                  <div className="relative group">
-                    <input
-                      className="w-full bg-transparent border-b border-gray-300 py-3 text-lg text-[#1C1C1C] focus:outline-none focus:border-[#1C1C1C] transition-colors placeholder-transparent peer"
-                      id="fullname"
-                      placeholder="Name"
-                      required
-                      value={mainBooker.name}
-                      onChange={(e) =>
-                        setMainBooker({ ...mainBooker, name: e.target.value })
-                      }
-                    />
-                    <label
-                      htmlFor="fullname"
-                      className="absolute left-0 -top-3.5 text-gray-600 text-xs transition-all peer-placeholder-shown:text-base peer-placeholder-shown:text-gray-600 peer-placeholder-shown:top-3 peer-focus:-top-3.5 peer-focus:text-gray-600 peer-focus:text-xs"
-                    >
-                      Main Guest Name
-                    </label>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="relative group">
-                      <input
-                        className="w-full bg-transparent border-b border-gray-300 py-3 text-lg text-[#1C1C1C] focus:outline-none focus:border-[#1C1C1C] transition-colors placeholder-transparent peer"
-                        id="phone"
-                        placeholder="Phone"
-                        required
-                        type="tel"
-                        value={mainBooker.phone}
-                        onChange={(e) =>
-                          setMainBooker({
-                            ...mainBooker,
-                            phone: e.target.value,
-                          })
-                        }
-                      />
-                      <label
-                        htmlFor="phone"
-                        className="absolute left-0 -top-3.5 text-gray-600 text-xs transition-all peer-placeholder-shown:text-base peer-placeholder-shown:text-gray-600 peer-placeholder-shown:top-3 peer-focus:-top-3.5 peer-focus:text-gray-600 peer-focus:text-xs"
-                      >
-                        Phone Number
-                      </label>
-                    </div>
-                    <div className="relative group">
-                      <input
-                        className="w-full bg-transparent border-b border-gray-300 py-3 text-lg text-[#1C1C1C] focus:outline-none focus:border-[#1C1C1C] transition-colors placeholder-transparent peer"
-                        id="email"
-                        placeholder="Email"
-                        required
-                        type="email"
-                        value={mainBooker.email}
-                        onChange={(e) =>
-                          setMainBooker({
-                            ...mainBooker,
-                            email: e.target.value,
-                          })
-                        }
-                      />
-                      <label
-                        htmlFor="email"
-                        className="absolute left-0 -top-3.5 text-gray-600 text-xs transition-all peer-placeholder-shown:text-base peer-placeholder-shown:text-gray-600 peer-placeholder-shown:top-3 peer-focus:-top-3.5 peer-focus:text-gray-600 peer-focus:text-xs"
-                      >
-                        Email Address
-                      </label>
-                    </div>
-                  </div>
+    <div className="min-h-screen bg-[#F5F5F5] flex items-center justify-center p-4 font-sans">
+        <div className="w-full max-w-3xl bg-white shadow-2xl rounded-2xl overflow-hidden border border-gray-200">
+            {/* Header */}
+            <div className="bg-[#1C1C1C] p-6 text-white flex justify-between items-center">
+                <h1 className="text-xl font-bold tracking-widest">Party NIGHT</h1>
+                <div className="flex gap-1">
+                    {[1,2,3,4].map(i => <div key={i} className={`h-1 w-4 rounded ${step >= i ? 'bg-white' : 'bg-white/20'}`}></div>)}
                 </div>
+            </div>
+            
+            <div className="p-6 md:p-10">
+                
+                {/* STEP 1: GUEST FORM */}
+                {step === 1 && (
+                    <form onSubmit={handleInitiate} className="space-y-5 animate-fadeIn">
+                        <div className="flex justify-between items-end border-b pb-2 mb-4">
+                            <h3 className="font-bold text-lg">1. Main Guest</h3>
+                            <button type="button" onClick={handleReset} className="text-[10px] text-red-500 font-bold uppercase">Reset Form</button>
+                        </div>
+                        
+                        <div className="grid grid-cols-3 gap-3">
+                            <input className="input-field" placeholder="First Name" required value={mainGuest.firstName} onChange={e=>setMainGuest({...mainGuest, firstName: e.target.value})} />
+                            <input className="input-field" placeholder="Last Name" required value={mainGuest.lastName} onChange={e=>setMainGuest({...mainGuest, lastName: e.target.value})} />
+                            <input className="input-field" placeholder="Surname" required value={mainGuest.surname} onChange={e=>setMainGuest({...mainGuest, surname: e.target.value})} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <input className="input-field" type="tel" placeholder="Phone Number" required value={mainGuest.phone} onChange={e=>setMainGuest({...mainGuest, phone: e.target.value})} />
+                            <input className="input-field" type="email" placeholder="Email Address" required value={mainGuest.email} onChange={e=>setMainGuest({...mainGuest, email: e.target.value})} />
+                        </div>
 
-                <div className="pt-6">
-                  <div className="flex justify-between items-center mb-4">
-                    <label className="block text-xs font-bold uppercase tracking-wide text-gray-400">
-                      Accompanying Guests ({members.length}/4)
-                    </label>
-                    {members.length < 4 && (
-                      <button
-                        type="button"
-                        onClick={addMember}
-                        className="text-[10px] uppercase font-bold tracking-widest text-[#1C1C1C] hover:underline flex items-center gap-1"
-                      >
-                        <span>+</span> Add Guest
-                      </button>
-                    )}
-                  </div>
-                  <div className="space-y-4">
-                    {members.map((member, index) => (
-                      <div
-                        key={index}
-                        className="flex gap-4 items-end animate-fadeIn"
-                      >
-                        <input
-                          className="flex-grow border-b border-gray-200 py-2 text-sm text-[#1C1C1C] focus:outline-none focus:border-gray-400 bg-transparent placeholder-gray-300"
-                          placeholder="Guest Name"
-                          value={member.name}
-                          onChange={(e) =>
-                            handleMemberChange(index, "name", e.target.value)
-                          }
-                        />
-                        <input
-                          className="w-28 border-b border-gray-200 py-2 text-sm text-[#1C1C1C] focus:outline-none focus:border-gray-400 bg-transparent placeholder-gray-300"
-                          placeholder="Phone"
-                          type="tel"
-                          value={member.phone}
-                          onChange={(e) =>
-                            handleMemberChange(index, "phone", e.target.value)
-                          }
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeMember(index)}
-                          className="text-gray-600 hover:text-red-500 transition text-xl leading-none pb-1"
-                        >
-                          &times;
+                        <div className="mt-8">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="font-bold text-lg">2. Add Members ({members.length})</h3>
+                                {members.length < 4 && <button type="button" onClick={()=>setMembers([...members, {name:'', phone:''}])} className="text-xs bg-black text-white px-3 py-1 rounded font-bold">+ ADD</button>}
+                            </div>
+                            {members.map((m, i) => (
+                                <div key={i} className="flex gap-2 mb-2">
+                                    <input className="input-field flex-grow" placeholder="Full Name" value={m.name} onChange={e=>{const n=[...members]; n[i].name=e.target.value; setMembers(n)}} />
+                                    <input className="input-field w-1/3" placeholder="Phone" type="tel" value={m.phone} onChange={e=>{const n=[...members]; n[i].phone=e.target.value; setMembers(n)}} />
+                                    <button type="button" onClick={()=>{const n=[...members]; n.splice(i,1); setMembers(n)}} className="text-red-500 font-bold px-2">×</button>
+                                </div>
+                            ))}
+                            {members.length === 0 && <p className="text-xs text-gray-400 italic">No additional members added.</p>}
+                        </div>
+
+                        <button disabled={loading} className="w-full bg-[#1C1C1C] text-white py-4 mt-6 font-bold text-xs uppercase tracking-[0.2em] hover:bg-gray-800 transition">
+                            {loading ? "Processing..." : "Continue to Payment"}
                         </button>
-                      </div>
-                    ))}
-                    {members.length === 0 && (
-                      <p className="text-xs text-gray-600 italic">
-                        No extra guests added.
-                      </p>
-                    )}
-                  </div>
-                </div>
+                    </form>
+                )}
 
-                <div className="pt-8">
-                  <button
-                    disabled={loading}
-                    className="w-full bg-[#1C1C1C] text-[#FDFBF7] py-4 font-bold text-xs uppercase tracking-[0.2em] hover:bg-black transition-all shadow-xl hover:shadow-2xl transform hover:-translate-y-1"
-                  >
-                    {loading ? "Processing..." : "Continue to Payment"}
-                  </button>
-                </div>
-              </form>
+                {/* STEP 2: PAYMENT SCREEN */}
+                {step === 2 && (
+                    <div className="text-center animate-fadeIn">
+                        <button onClick={() => setStep(1)} className="text-xs text-gray-400 mb-6 hover:text-black">← Back</button>
+                        <h2 className="text-4xl font-bold mb-1">₹{ticketData.totalAmount}</h2>
+                        <p className="text-xs text-gray-500 uppercase tracking-widest mb-8">Total for {1 + members.length} Persons</p>
+                        
+                        <div className="bg-white p-3 border border-gray-200 shadow-lg rounded-xl mb-8 inline-block relative">
+                            <QRCodeCanvas value={getUPI()} size={180} level="H" />
+                            <p className="text-[9px] mt-2 text-gray-400 uppercase font-bold tracking-wider">Scan to Pay</p>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 mb-8 max-w-xs mx-auto">
+                            <button onClick={() => window.location.href = getUPI('gpay')} className="py-3 border rounded font-bold text-blue-600 bg-blue-50 hover:bg-blue-100">Pay via GPay</button>
+                            <button onClick={() => window.location.href = getUPI('phonepe')} className="py-3 border rounded font-bold text-purple-600 bg-purple-50 hover:bg-purple-100">Pay via PhonePe</button>
+                            <button onClick={() => window.location.href = getUPI('paytm')} className="py-3 border rounded font-bold text-cyan-600 bg-cyan-50 hover:bg-cyan-100">Pay via Paytm</button>
+                        </div>
+
+                        <button onClick={() => setStep(3)} className="w-full bg-green-600 text-white py-4 rounded font-bold text-xs uppercase tracking-widest shadow-lg hover:bg-green-700">
+                            I Have Paid → Next
+                        </button>
+                    </div>
+                )}
+
+                {/* STEP 3: VERIFY UTR */}
+                {step === 3 && (
+                    <div className="max-w-sm mx-auto animate-fadeIn">
+                        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6">
+                            <h3 className="font-bold text-yellow-800 text-sm">⚠️ Payment Verification</h3>
+                            <p className="text-xs text-yellow-700 mt-1">Enter the 12-digit Transaction ID / UTR from your payment app to verify. Do not refresh.</p>
+                        </div>
+                        
+                        <form onSubmit={handlePaymentSubmit}>
+                            <label className="block text-xs font-bold uppercase text-gray-500 mb-2">Transaction ID (UTR)</label>
+                            <input className="w-full border-2 border-gray-300 p-3 rounded text-center font-mono tracking-widest text-lg focus:border-black focus:outline-none mb-6 uppercase" placeholder="XXXXXXXXXXXX" value={utr} onChange={e => setUtr(e.target.value)} maxLength={12} />
+                            
+                            <div className="flex items-start gap-3 mb-6 p-3 bg-gray-50 rounded">
+                                <input type="checkbox" id="ack" className="mt-1" checked={warningAck} onChange={e => setWarningAck(e.target.checked)} />
+                                <label htmlFor="ack" className="text-xs text-gray-600 leading-tight">I confirm that I have paid the exact amount of <strong>₹{ticketData.totalAmount}</strong>.</label>
+                            </div>
+
+                            <button disabled={!warningAck || loading} className={`w-full py-4 rounded font-bold text-xs uppercase tracking-widest transition ${warningAck ? 'bg-black text-white hover:bg-gray-800' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
+                                {loading ? "Submitting..." : "Verify Payment"}
+                            </button>
+                            <button type="button" onClick={() => setStep(2)} className="w-full mt-4 text-xs text-gray-400">Back to Payment</button>
+                        </form>
+                    </div>
+                )}
+
+                {step === 4 && <StatusPage />}
+
             </div>
-          )}
-
-          {/* STEP 2: PAYMENT */}
-          {step === 2 && (
-            <div className="animate-fadeIn max-w-sm mx-auto w-full text-center relative">
-              {/* Back Button */}
-              <button
-                onClick={() => setStep(1)}
-                className="absolute -top-8 left-0 text-[10px] font-bold uppercase tracking-widest text-gray-400 hover:text-[#1C1C1C] transition flex items-center gap-1"
-              >
-                ← Edit Details
-              </button>
-
-              <h3 className="font-serif text-3xl mb-2 mt-4">Secure Payment</h3>
-              <p className="text-xs text-gray-600 uppercase tracking-widest mb-8">
-                Scan QR or use app link to pay
-              </p>
-
-              <UpiPaymentOptions
-                amount={ticketData?.amount}
-                ticketId={ticketData?.ticketId}
-              />
-
-              <div className="mb-8 mt-6">
-                <p className="text-[10px] uppercase tracking-widest text-gray-600 mb-1">
-                  Total Due
-                </p>
-                <p className="text-5xl font-serif text-[#1C1C1C]">
-                  ₹{ticketData?.amount}
-                </p>
-              </div>
-
-              <form onSubmit={handlePaymentSubmit} className="space-y-6">
-                <div className="group relative">
-                  <input
-                    className="w-full bg-[#F9FAFB] border border-gray-200 py-4 text-center tracking-widest font-mono text-lg text-[#1C1C1C] focus:outline-none focus:border-[#1C1C1C] transition-all rounded-none"
-                    placeholder="ENTER UTR / REF ID"
-                    required
-                    value={utr}
-                    onChange={(e) => setUtr(e.target.value)}
-                  />
-                  <p className="text-[10px] text-gray-600 mt-2">
-                    Check your payment app for 12-digit UTR
-                  </p>
-                </div>
-                <button
-                  disabled={loading}
-                  className="w-full bg-[#1C1C1C] text-[#FDFBF7] py-4 font-bold text-xs uppercase tracking-[0.2em] hover:bg-black transition-all shadow-xl hover:shadow-2xl transform hover:-translate-y-1"
-                >
-                  {loading ? "Verifying..." : "I Have Paid"}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* STEP 3: TICKET */}
-          {step === 3 && <TicketSuccessStep />}
         </div>
-      </div>
+        <style>{`
+            .input-field { @apply w-full border-b border-gray-300 py-2 text-sm outline-none focus:border-black transition-colors bg-transparent placeholder-gray-400; }
+            .animate-fadeIn { animation: fadeIn 0.4s ease-out forwards; }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        `}</style>
     </div>
   );
 };
