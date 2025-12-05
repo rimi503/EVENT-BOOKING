@@ -1,21 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap');
+
 @import "tailwindcss";
+
+@theme {
+  --color-cream: #F0DAC5;
+  --color-navy: #1C2340;
+  --color-plum: #50223C;
+  --font-sans: 'Inter', sans-serif;
+  --font-serif: 'Playfair Display', serif;
+}
+
+:root {
+  --color-primary: #1C2340;
+  /* Navy */
+  --color-secondary: #F0DAC5;
+  /* Cream */
+  --color-accent: #50223C;
+  /* Plum */
+}
 
 html {
   scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
 body {
-  background-color: #F5F5F5;
-  color: #1C1C1C;
+  background-color: var(--color-secondary);
+  color: var(--color-primary);
+  font-family: var(--font-sans);
 }
 
+/* Glassmorphism Utilities */
+.glass {
+  background: rgba(240, 218, 197, 0.6);
+  /* Cream transparent */
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(28, 35, 64, 0.1);
+  /* Navy border */
+}
+
+.glass-dark {
+  background: rgba(28, 35, 64, 0.9);
+  /* Navy transparent */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(240, 218, 197, 0.1);
+}
+
+/* Hide Scrollbar but allow scroll */
 .no-scrollbar::-webkit-scrollbar {
-    display: none;
-}
-.no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  display: none;
 }
 
-.input-field {
-    @apply w-full border-b border-gray-300 py-2 text-sm bg-transparent focus:outline-none focus:border-black transition-colors placeholder-gray-400;
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
