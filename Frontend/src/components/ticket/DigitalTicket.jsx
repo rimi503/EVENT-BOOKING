@@ -25,13 +25,29 @@ const DigitalTicket = ({ name, id, index, eventName = "New Year Gala" }) => {
                 onclone: (clonedDoc) => {
                     const el = clonedDoc.querySelector('[data-ticket="true"]');
                     if (el) {
-                        // Remove complex CSS for stability
+                        // 1. Remove Shadows (Tailwind v4 might use oklab for shadow colors)
+                        el.style.boxShadow = 'none';
+                        el.querySelectorAll('*').forEach(child => {
+                            child.style.boxShadow = 'none';
+                        });
+
+                        // 2. Handle Glass/Blur elements -> Make them solid/simple
                         const glassElements = el.querySelectorAll('.backdrop-blur-sm, .backdrop-blur-lg');
                         glassElements.forEach(g => {
                             g.style.backdropFilter = 'none';
-                            g.style.background = 'rgba(255, 255, 255, 0.95)'; // Solid fallback
-                            g.style.boxShadow = 'none';
+                            g.style.background = 'rgba(255, 255, 255, 0.95)';
                         });
+
+                        // 3. Handle Opacity/Alpha colors (bg-plum/40 etc might be oklab)
+                        // Identify decorative blobs by their classes or structure
+                        const blobs = el.querySelectorAll('.rounded-full.blur-\\[80px\\]');
+                        blobs.forEach(blob => {
+                            blob.style.display = 'none'; // Hide decorative blurs completely for PDF (cleaner, avoids parsing issues)
+                        });
+
+                        // 4. Force text colors if needed (usually handled by browser, but safety first)
+                        // If specific elements cause issues, we can target them. 
+                        // For now, hiding the complex blobs is the highest impact fix for oklab/blur issues.
                     }
                 }
             });
